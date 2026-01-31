@@ -3,9 +3,10 @@ import tkinter as tk
 from tkinter import messagebox
 
 BOARD_SIZE = 9
-WIN_LENGTH = 5
+WIN_LENGTH = 4
 CELL_SIZE = 40
 PADDING = 10
+TRAINING_EPISODES = 3000
 
 
 class Game:
@@ -80,6 +81,100 @@ class Game:
         return all(v is not None for v in self.board) and self.winner() is None
 
 
+class QLearningAgent:
+    def __init__(self, board_size, win_length, alpha=0.3, gamma=0.9, epsilon=0.3):
+        self.board_size = board_size
+        self.win_length = win_length
+        self.alpha = alpha
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.q = {}
+
+    def encode_state(self, board, current_mark):
+        chars = []
+        for v in board:
+            if v is None:
+                chars.append(".")
+            else:
+                chars.append(v)
+        return current_mark + ":" + "".join(chars)
+
+    def get_q(self, state, action):
+        return self.q.get((state, action), 0.0)
+
+    def best_action(self, state, available_moves):
+        best_val = None
+        best_actions = []
+        for action in available_moves:
+            value = self.get_q(state, action)
+            if best_val is None or value > best_val:
+                best_val = value
+                best_actions = [action]
+            elif value == best_val:
+                best_actions.append(action)
+        if not best_actions:
+            return None
+        return random.choice(best_actions)
+
+    def choose_action(self, board, current_mark, available_moves, training=False):
+        state = self.encode_state(board, current_mark)
+        if training and random.random() < self.epsilon:
+            return random.choice(available_moves)
+        return self.best_action(state, available_moves)
+
+    def update(self, state, action, reward, next_state, next_moves, done):
+        current = self.get_q(state, action)
+        if done:
+            target = reward
+        else:
+            max_next = 0.0
+            if next_moves:
+                max_next = max(self.get_q(next_state, a) for a in next_moves)
+            target = reward + self.gamma * max_next
+        self.q[(state, action)] = current + self.alpha * (target - current)
+
+    def train_self_play(self, episodes=TRAINING_EPISODES):
+        for _ in range(episodes):
+            game = Game(board_size=self.board_size, win_length=self.win_length, human_first=True)
+            current_mark = "o"
+            last_sa = {}
+
+            while True:
+                moves = game.available_moves()
+                if not moves:
+                    break
+
+                state = self.encode_state(game.board, current_mark)
+                action = self.choose_action(game.board, current_mark, moves, training=True)
+                game.play(action, current_mark)
+
+                win = game.winner()
+                draw = game.is_draw()
+                if win or draw:
+                    reward = 1.0 if win == current_mark else 0.0
+                    self.update(state, action, reward, None, None, True)
+                    other = "x" if current_mark == "o" else "o"
+                    if other in last_sa:
+                        other_state, other_action = last_sa[other]
+                        other_reward = -1.0 if win else 0.0
+                        self.update(other_state, other_action, other_reward, None, None, True)
+                    break
+
+                other = "x" if current_mark == "o" else "o"
+                next_state = self.encode_state(game.board, other)
+                next_moves = game.available_moves()
+                self.update(state, action, 0.0, next_state, next_moves, False)
+                last_sa[current_mark] = (state, action)
+                current_mark = other
+
+    def select_move(self, board, current_mark, available_moves):
+        state = self.encode_state(board, current_mark)
+        action = self.best_action(state, available_moves)
+        if action is None:
+            return random.choice(available_moves)
+        return action
+
+
 class UI:
     """表示・入力・メッセージ（tkinter依存）はここに集約"""
     def __init__(self):
@@ -91,7 +186,12 @@ class UI:
         self.canvas.pack(padx=PADDING, pady=PADDING)
 
         human_first = self.choose_order()
+        self.cpu_algorithm = self.choose_cpu_algorithm()
         self.game = Game(human_first=human_first)
+        self.cpu_agent = None
+        if self.cpu_algorithm == "q":
+            self.cpu_agent = QLearningAgent(self.game.board_size, self.game.win_length)
+            self.cpu_agent.train_self_play()
 
         self.canvas.bind("<Button-1>", self.on_click)
 
@@ -103,6 +203,14 @@ class UI:
 
     def choose_order(self) -> bool:
         return messagebox.askyesno("先攻・後攻選択", "先攻でプレイしますか？", parent=self.root)
+
+    def choose_cpu_algorithm(self) -> str:
+        use_q = messagebox.askyesno(
+            "CPUアルゴリズム選択",
+            "CPUはQ学習を使いますか？\n\n「はい」= Q学習\n「いいえ」= ランダム",
+            parent=self.root,
+        )
+        return "q" if use_q else "random"
 
     def index_from_event(self, event):
         col = event.x // CELL_SIZE
@@ -155,7 +263,13 @@ class UI:
     def cpu_step(self):
         if self.game.game_over:
             return
-        idx = self.game.cpu_choose_move()
+        if self.cpu_algorithm == "q" and self.cpu_agent is not None:
+            moves = self.game.available_moves()
+            if not moves:
+                return
+            idx = self.cpu_agent.select_move(self.game.board, self.game.cpu_mark, moves)
+        else:
+            idx = self.game.cpu_choose_move()
         if idx is None:
             return
         self.game.play(idx, self.game.cpu_mark)

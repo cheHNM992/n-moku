@@ -1,3 +1,5 @@
+import os
+import pickle
 import random
 import tkinter as tk
 from tkinter import messagebox
@@ -6,7 +8,7 @@ BOARD_SIZE = 9
 WIN_LENGTH = 4
 CELL_SIZE = 40
 PADDING = 10
-TRAINING_EPISODES = 3000
+TRAINING_EPISODES = 100000
 
 
 class Game:
@@ -89,6 +91,24 @@ class QLearningAgent:
         self.gamma = gamma
         self.epsilon = epsilon
         self.q = {}
+
+    def q_filename(self):
+        filename = f"q_table_{self.board_size}_{self.win_length}_{TRAINING_EPISODES}.pkl"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base_dir, filename)
+
+    def load_if_exists(self):
+        filename = self.q_filename()
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                self.q = pickle.load(f)
+            return True
+        return False
+
+    def save(self):
+        filename = self.q_filename()
+        with open(filename, "wb") as f:
+            pickle.dump(self.q, f)
 
     def encode_state(self, board, current_mark):
         chars = []
@@ -191,7 +211,9 @@ class UI:
         self.cpu_agent = None
         if self.cpu_algorithm == "q":
             self.cpu_agent = QLearningAgent(self.game.board_size, self.game.win_length)
-            self.cpu_agent.train_self_play()
+            if not self.cpu_agent.load_if_exists():
+                self.cpu_agent.train_self_play()
+                self.cpu_agent.save()
 
         self.canvas.bind("<Button-1>", self.on_click)
 
